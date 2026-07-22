@@ -16,6 +16,10 @@ target
 # ai-switch project-specific
 /PLAN/
 /config.toml
+*.log
+phase2-export-from-claude.txt
+phase2-verify.txt
+
 
 # RustRover
 #  JetBrains specific template is maintained in a separate JetBrains.gitignore that can

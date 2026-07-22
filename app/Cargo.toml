@@ -1,0 +1,13 @@
+[package]
+name = "ai-switch"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "ai-switch"
+path = "src/main.rs"
+
+[dependencies]
+ai-switch-core = { path = "../core" }
+gtk4 = "0.9"
+tracing = "0.1"

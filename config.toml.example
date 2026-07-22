@@ -1,0 +1,23 @@
+# ai-switch configuration example
+# Copy this to ~/.config/ai-switch/config.toml and edit as needed.
+
+schema_version = 1
+
+[[models]]
+id = "llama-3.2"
+name = "Llama 3.2 3B"
+script_path = "/path/to/models/llama-3.2/run.sh"
+port = 8081
+health_timeout_sec = 30
+
+[[models]]
+id = "mistral-7b"
+name = "Mistral 7B Instruct"
+script_path = "/path/to/models/mistral-7b/run.sh"
+port = 8082
+health_timeout_sec = 30
+
+[global]
+log_dir = ""
+proxy_port = 9080
+auto_restart_on_context_full = true

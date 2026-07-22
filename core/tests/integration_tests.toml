@@ -1,0 +1,20 @@
+schema_version = 1
+
+[[models]]
+id = "model-a"
+name = "Model A"
+script_path = "/mnt/orico/Documents/ApplicationsRAW/ai-switch/test/model-a.sh"
+port = 9876
+health_timeout_sec = 5
+
+[[models]]
+id = "model-b"
+name = "Model B"
+script_path = "/mnt/orico/Documents/ApplicationsRAW/ai-switch/test/model-b.sh"
+port = 9877
+health_timeout_sec = 5
+
+[global]
+log_dir = ""
+proxy_port = 9080
+auto_restart_on_context_full = true
