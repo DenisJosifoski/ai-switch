@@ -19,6 +19,7 @@ target
 *.log
 phase2-export-from-claude.txt
 phase2-verify.txt
+*-context-usage.txt
 
 
 # RustRover

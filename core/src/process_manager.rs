@@ -4,7 +4,8 @@
 //! high-level operations: start, stop, switch, and zombie-port handling.
 
 use nix::sys::signal::{SIGKILL, SIGTERM};
-use nix::unistd::{getpgid, Pid};
+use nix::unistd::getpgid;
+pub use nix::unistd::Pid;
 use std::net::TcpStream;
 use std::os::unix::io::AsRawFd;
 use std::path::Path;
@@ -83,10 +84,10 @@ pub trait ProcessGuard: Send {
 /// Linux implementation of ProcessGuard.
 #[cfg(target_os = "linux")]
 pub struct LinuxProcessGuard {
-    pid: Option<Pid>,
+    pub pid: Option<Pid>,
     #[allow(dead_code)]
-    port: u16,
-    shutdown_timeout_sec: u16,
+    pub port: u16,
+    pub shutdown_timeout_sec: u16,
 }
 
 #[cfg(target_os = "linux")]
@@ -354,6 +355,11 @@ impl ProcessManager {
         }
     }
 
+    /// Access the underlying config for reconciliation at startup.
+    pub fn config(&self) -> &Config {
+        &self.config
+    }
+
     /// Start a model by id.
     pub fn start_model(&mut self, id: &str) -> Result<(), ProcessError> {
         // One-at-a-time rule
@@ -482,8 +488,13 @@ impl ProcessManager {
         self.running_model.as_ref().map(|m| m.id.as_str())
     }
 
+    /// Set the running model (used during reconciliation at startup).
+    pub fn set_running_model(&mut self, model: RunningModel) {
+        self.running_model = Some(model);
+    }
+
     /// Check if a port is free or occupied by a llama-server process.
-    fn check_port(port: u16) -> PortState {
+    pub fn check_port(port: u16) -> PortState {
         // Try to bind the port
         if TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
             // Port is occupied — probe it for /v1/models with a short timeout
@@ -497,7 +508,7 @@ impl ProcessManager {
                     if resp.status().is_success() {
                         // Check if it's a llama-server response (has /v1/models endpoint)
                         if let Ok(body) = resp.text() {
-                            if body.contains("\"id\"") || body.contains("model") {
+                            if body.contains("\"id\"") && body.contains("model") {
                                 return PortState::OccupiedByModel;
                             }
                         }
@@ -554,10 +565,10 @@ impl ProcessManager {
                                                 for fd_entry in fds.flatten() {
                                                     if let Ok(link) = std::fs::read_link(fd_entry.path()) {
                                                         if link.to_string_lossy().contains(&inode_num.to_string()) {
-                                                            if let Some(pid_str) = entry.file_name().to_string_lossy().strip_prefix("proc") {
-                                                                if let Ok(pid) = pid_str.parse::<u32>() {
-                                                                    return Ok(pid);
-                                                                }
+                                                            // entry.file_name() returns the bare numeric directory name
+                                                            // (e.g. "1234"), not a path with a prefix.
+                                                            if let Ok(pid) = entry.file_name().to_string_lossy().parse::<u32>() {
+                                                                return Ok(pid);
                                                             }
                                                         }
                                                     }

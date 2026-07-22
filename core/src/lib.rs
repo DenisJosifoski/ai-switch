@@ -98,16 +98,18 @@ pub fn stop_model(pm: &mut ProcessManager, model_id: &str) -> Result<(), Process
 mod tests {
     use super::*;
 
-   #[test]
+    #[test]
     fn test_run_without_config_returns_not_found() {
         // Without a config file, run() should return NotFound.
-        // Use .err().unwrap() instead of .unwrap_err() because SingleInstanceGuard
-        // doesn't implement Debug, so the tuple (Config, ReconcileResult, Guard)
-        // can't be formatted with {:?} which unwrap_err() requires.
+        // Override environment variables to prevent finding the real user config.
+        std::env::set_var("XDG_CONFIG_HOME", "/nonexistent-xdg-config");
+        std::env::set_var("HOME", "/nonexistent-home");
+
         let result = run(None);
         assert!(result.is_err());
         assert!(result.err().unwrap().to_string().contains("no config"));
     }
+
 
    #[test]
     fn test_run_with_example_config_returns_guard() {

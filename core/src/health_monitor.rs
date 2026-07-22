@@ -8,6 +8,15 @@ use crate::process_manager::{ModelState, ProcessError};
 use std::time::Duration;
 use tracing::{debug, info, warn};
 
+/// Build an HTTP client with a timeout to prevent indefinite hangs on
+/// unresponsive or hung listeners during health monitoring.
+fn http_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client build failed")
+}
+
 /// Health monitor — polls `/v1/models` to track model startup progress.
 pub struct HealthMonitor {
     port: u16,
@@ -74,7 +83,7 @@ impl HealthMonitor {
     /// Check if the model is healthy (Ready).
     fn check_health(&self) -> Result<bool, ProcessError> {
         let url = format!("http://127.0.0.1:{}/v1/models", self.port);
-        match reqwest::blocking::get(&url) {
+        match http_client().get(&url).send() {
             Ok(resp) => {
                 if resp.status().is_success() {
                     // Check if it's a valid llama-server response
@@ -96,7 +105,7 @@ impl HealthMonitor {
     /// Get the current loading progress (best effort).
     fn get_loading_progress(&self) -> Option<String> {
         let url = format!("http://127.0.0.1:{}/v1/models", self.port);
-        match reqwest::blocking::get(&url) {
+        match http_client().get(&url).send() {
             Ok(resp) => {
                 if resp.status().is_success() {
                     if let Ok(body) = resp.text() {

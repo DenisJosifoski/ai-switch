@@ -56,10 +56,25 @@ where
     Ok(PathBuf::from(s))
 }
 
+/// Deserialize an optional PathBuf where an empty string ("") is treated as
+/// None, allowing the accessor's default to kick in. This supports the
+/// documented convention of `log_dir = ""` meaning "use default".
+fn deserialize_optional_pathbuf<'de, D>(deserializer: D) -> Result<Option<PathBuf>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let opt = Option::<String>::deserialize(deserializer)?;
+    match opt {
+        Some(s) if s.is_empty() => Ok(None),  // "" → None, triggers default
+        Some(s) => Ok(Some(PathBuf::from(s))),
+        None => Ok(None),
+    }
+}
+
 /// Global settings section.
 #[derive(Debug, Clone, Deserialize)]
 pub struct GlobalSettings {
-    #[serde(default)]
+  #[serde(default, deserialize_with = "deserialize_optional_pathbuf")]
     pub log_dir: Option<PathBuf>,
     #[serde(default)]
     pub proxy_port: Option<u16>,

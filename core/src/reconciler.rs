@@ -4,7 +4,17 @@
 use crate::config::Config;
 use crate::process_manager::{ProcessError, PortState};
 use std::net::TcpStream;
+use std::time::Duration;
 use tracing::{debug, info, warn};
+
+/// Build an HTTP client with a timeout to prevent indefinite hangs on
+/// unresponsive or hung listeners during startup reconciliation.
+fn http_client() -> reqwest::blocking::Client {
+    reqwest::blocking::Client::builder()
+        .timeout(Duration::from_secs(5))
+        .build()
+        .expect("reqwest client build failed")
+}
 
 /// Result of the startup reconciliation.
 #[derive(Debug)]
@@ -70,7 +80,7 @@ impl PortCheck for PortState {
         if TcpStream::connect(format!("127.0.0.1:{}", port)).is_ok() {
             // Port is occupied — probe it for /v1/models
             let url = format!("http://127.0.0.1:{}/v1/models", port);
-            if let Ok(resp) = reqwest::blocking::get(&url) {
+            if let Ok(resp) = http_client().get(&url).send() {
                 if resp.status().is_success() {
                     // Check if it's a valid llama-server response
                     if let Ok(body) = resp.text() {

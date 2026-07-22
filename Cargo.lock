@@ -19,8 +19,11 @@ name = "ai-switch"
 version = "0.1.0"
 dependencies = [
  "ai-switch-core",
+ "gio",
+ "glib",
  "gtk4",
  "tracing",
+ "tracing-subscriber",
 ]
 
 [[package]]
