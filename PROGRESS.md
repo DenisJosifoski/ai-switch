@@ -59,3 +59,46 @@
 ### Deferred / flagged
 - Toast notification: Currently uses `tracing::info!()` for auto-restart notifications. A proper desktop toast (libnotify / GTK4 Notification) is deferred to a future phase.
 - The `PollingState::Error` variant and `clear_context()` method exist for potential future use when /slots responses become unreliable.
+
+## Phase 5 — Reverse proxy (single fixed port)
+
+### What was built
+- **`core/src/proxy.rs`**: A transparent local HTTP reverse proxy server using `tiny_http` running on a background `std::thread`. Binds to `127.0.0.1:proxy_port` (default 9080).
+  - Inspects `ProxyState` on every request to determine forwarding target
+  - Model Ready → forwards all requests (path, headers, body, query) to `http://127.0.0.1:{active_model_port}` with streaming response support via `tiny_http::Read` trait impl
+  - No model → HTTP 503 with `{"error": "No active model server in ai-switch"}`
+  - Loading (starting/restarting) → HTTP 503 with `{"error": "Model server is currently starting/restarting"}`
+  - Forwarding errors → HTTP 503 with `{"error": "Model server unavailable"}`
+  - Graceful shutdown via `AtomicBool` flag + `mpsc::channel` signal
+
+- **`ProxyState`** struct: Shared state between the app and proxy, updated whenever a model starts/stops/switches/restarts. Fields: `target_port: Option<u16>`, `is_loading: bool`. Thread-safe via `Arc<Mutex<>>`.
+
+- **App integration** (`app/src/main.rs`): Starts the proxy server after config load, stops it on app shutdown. Falls back gracefully if proxy binding fails (doesn't prevent app launch).
+
+- **Window integration** (`app/src/window.rs`): Proxy state is updated from background threads after every model lifecycle operation:
+  - Toggle start/switch → `set_target(port)` on success
+  - Toggle stop → `clear()` on success
+  - Restart button → `set_target(port)` on success
+  - Auto-restart (context full) → `set_target(port)` on success
+
+### Dependencies added
+- `tiny_http = "0.12"` — lightweight synchronous HTTP server for the proxy
+- No tokio runtime needed — fits the existing `std::thread` + GTK pattern
+
+### Tests
+- 5 unit tests in `proxy::tests`: default state, set_target, set_loading, clear, full lifecycle
+- All 19 core unit tests pass
+- All 4 integration tests pass (repeated switch loop, zombie-port, port-free-check, no-orphans)
+
+### Architecture decisions
+- **tiny_http over hyper**: The spec mentioned `hyper`/`tokio` as an option but also allowed `tiny_http`/`std::threads`. Chose tiny_http because:
+  - The existing codebase uses `std::thread::spawn` everywhere (no tokio runtime)
+  - Simpler API — no complex body type conversions needed
+  - Streaming works via `Read` trait impl for SSE token streaming
+  - `reqwest::blocking` already used for health checks and context polling
+
+- **Proxy state update from background threads**: Rather than querying ProcessManager in the main loop, proxy state is updated directly from background threads right after successful model operations. This avoids adding extra dependencies to the channel polling closure and ensures the proxy always reflects the actual model state.
+
+### Deviations from spec
+- Used `tiny_http` instead of `hyper`/`tokio` (spec explicitly allowed this alternative)
+- Proxy port hot-reload (changing proxy_port in Preferences updates the listener without restart) was deferred — the proxy reads its port at startup. This is acceptable since Preferences changes are infrequent and a restart is the clearest way to apply port changes.

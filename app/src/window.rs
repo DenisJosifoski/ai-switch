@@ -26,6 +26,7 @@ use crate::model_card::{CardState, ModelCard};
 use crate::preferences::PreferencesDialog;
 use ai_switch_core::config::Config;
 use ai_switch_core::process_manager::{ProcessError, PortState, ProcessManager, Pid};
+use ai_switch_core::proxy::ProxyState;
 
 /// Messages sent from background threads to the main GUI thread.
 enum ChannelMessage {
@@ -60,10 +61,13 @@ pub struct MainWindow {
     config: Config,
     /// Path to the config file on disk (for saving preferences).
     config_path: std::path::PathBuf,
+    /// Proxy state — updated when a model starts/stops so the reverse proxy
+    /// knows where to forward incoming requests.
+    proxy_state: Option<Arc<Mutex<ProxyState>>>,
 }
 
 impl MainWindow {
-    pub fn new(app: &Application, config: Config) -> Self {
+    pub fn new(app: &Application, config: Config, proxy_state: Option<Arc<Mutex<ProxyState>>>) -> Self {
         let widget = ApplicationWindow::builder()
             .application(app)
             .title("ai-switch")
@@ -246,6 +250,7 @@ impl MainWindow {
             sender_poll,
             slot_sender,
             auto_restart_enabled,
+            proxy_state.clone(),
         );
 
         // Wire toggle and restart handlers.
@@ -253,6 +258,10 @@ impl MainWindow {
             let pm_clone = Arc::clone(&pm);
             let keep_alive_ref = Rc::clone(&current_keep_alive);
             let sender_ref = sender.clone();
+
+            // Clone proxy state for background thread updates.
+            // Wrap in Rc first (cheap clone, never moves), then Arc inside closure (Send).
+            let proxy_state_for_bg = Rc::new(proxy_state.clone());
 
             // Clone shared references BEFORE entering the closure scope so they
             // aren't moved into the toggle handler and become unavailable for
@@ -269,14 +278,21 @@ impl MainWindow {
                 let model_id_toggle = model_id.clone();
                 let model_id_restart = model_id.clone();
 
+                // Clone proxy state for this card's closure.
+                let proxy_for_toggle = Rc::clone(&proxy_state_for_bg);
+                let proxy_for_restart = Rc::clone(&proxy_state_for_bg);
+
                 // ── Toggle handler ───────────────────────────────────
                 {
                     let ka_ref = Rc::clone(&keep_alive_ref);
                     let cards_inner = cards_for_toggle.clone();
                     let sender_inner = sender_for_toggle.clone();
                     let pm_ref = Arc::clone(&pm_for_toggle);
-
                     card.set_toggle_handler(move |on| {
+                        // Convert Rc to Arc for thread safety in spawned threads.
+                        let proxy_for_handler = proxy_for_toggle.as_ref()
+                            .as_ref()
+                            .map(|arc| Arc::clone(arc));
                         let cards_inner = cards_inner.borrow();
                         if on {
                             let target_card = match cards_inner.iter().find(|c| c.config().id == model_id_toggle) {
@@ -323,10 +339,29 @@ impl MainWindow {
                                 };
 
                                 let is_ok = result.is_ok();
+                                let port_for_proxy = if is_ok {
+                                    pm_thread.lock()
+                                        .ok()
+                                        .and_then(|pm| pm.config().models.iter()
+                                            .find(|m| m.id == bg_model_id)
+                                            .map(|m| m.port))
+                                } else {
+                                    None
+                                };
+
                                 let _ = sender_thread.send(ChannelMessage::SwitchCompleted {
                                     target_id: bg_model_id,
                                     result,
                                 });
+
+                                // Update proxy state after a successful model start/switch.
+                                if is_ok {
+                                    if let Some(ref proxy) = proxy_for_handler {
+                                        if let Some(port) = port_for_proxy {
+                                            proxy.lock().unwrap().set_target(port);
+                                        }
+                                    }
+                                }
 
                                 // Keep thread alive after successful start so Linux
                                 // PR_SET_PDEATHSIG does not kill the newly spawned process.
@@ -344,6 +379,8 @@ impl MainWindow {
 
                             let pm_thread = Arc::clone(&pm_ref);
                             let sender_thread = sender_inner.clone();
+                            // Convert Rc to Arc for thread safety.
+                            let proxy_thread = proxy_for_toggle.as_ref().as_ref().map(|arc| Arc::clone(arc));
 
                             std::thread::spawn(move || {
                                 let mut pm_lock = match pm_thread.lock() {
@@ -352,10 +389,18 @@ impl MainWindow {
                                 };
                                 if let Some(running_id) = pm_lock.get_running_model_id().map(String::from) {
                                     let result = pm_lock.stop_model(&running_id, false);
+                                    let is_ok = result.is_ok();
                                     let _ = sender_thread.send(ChannelMessage::StopCompleted {
                                         running_id,
                                         result,
                                     });
+
+                                    // Update proxy state after a successful stop.
+                                    if is_ok {
+                                        if let Some(ref proxy) = proxy_thread {
+                                            proxy.lock().unwrap().clear();
+                                        }
+                                    }
                                 }
                             });
                         }
@@ -368,8 +413,13 @@ impl MainWindow {
                     let sender_restart = sender_ref.clone();
                     let pm_restart = Arc::clone(&pm_clone);
                     let ka_ref_restart = Rc::clone(&keep_alive_ref);
+                    // Keep proxy_state_for_bg (Rc) for the closure capture.
+                    // We'll convert to Arc inside the thread spawn.
 
                     card.restart_button.connect_clicked(move |_| {
+                        let proxy_thread = proxy_for_restart.as_ref()
+                            .as_ref()
+                            .map(|arc| Arc::clone(arc));
                         let cards_inner = cards_restart.borrow();
                         let target = match cards_inner.iter().find(|c| c.config().id == model_id_restart) {
                             Some(c) => c,
@@ -395,6 +445,7 @@ impl MainWindow {
                         let pm_thread = Arc::clone(&pm_restart);
                         let sender_thread = sender_restart.clone();
                         let ka_thread = new_ka;
+                        let proxy_restart = proxy_thread.as_ref().map(|arc| Arc::clone(arc));
 
                         std::thread::spawn(move || {
                             let _ = sender_thread.send(ChannelMessage::RestartRequested {
@@ -416,10 +467,29 @@ impl MainWindow {
                             };
 
                             let is_ok = result.is_ok();
+                            let port_for_proxy = if is_ok {
+                                pm_thread.lock()
+                                    .ok()
+                                    .and_then(|pm| pm.config().models.iter()
+                                        .find(|m| m.id == bg_model_id)
+                                        .map(|m| m.port))
+                            } else {
+                                None
+                            };
+
                             let _ = sender_thread.send(ChannelMessage::SwitchCompleted {
                                 target_id: bg_model_id,
                                 result,
                             });
+
+                            // Update proxy state after a successful restart.
+                            if is_ok {
+                                if let Some(ref proxy) = proxy_restart {
+                                    if let Some(port) = port_for_proxy {
+                                        proxy.lock().unwrap().set_target(port);
+                                    }
+                                }
+                            }
 
                             // Keep thread alive after successful restart so Linux
                             // PR_SET_PDEATHSIG does not kill the newly spawned process.
@@ -440,6 +510,7 @@ impl MainWindow {
             current_keep_alive,
             config,
             config_path,
+            proxy_state,
         }
     }
 
@@ -637,6 +708,7 @@ impl MainWindow {
         sender: std::sync::mpsc::Sender<ChannelMessage>,
         slot_sender: std::sync::mpsc::Sender<SlotUpdate>,
         auto_restart_enabled: bool,
+        proxy_state: Option<Arc<Mutex<ProxyState>>>,
     ) {
         let http_client = reqwest::blocking::Client::builder()
             .timeout(std::time::Duration::from_secs(3))
@@ -705,6 +777,7 @@ impl MainWindow {
                                             Self::trigger_auto_restart(
                                                 &pm,
                                                 &sender,
+                                                &proxy_state,
                                                 model_id,
                                             );
                                         }
@@ -806,11 +879,13 @@ impl MainWindow {
     fn trigger_auto_restart(
         pm: &Arc<Mutex<ProcessManager>>,
         sender: &std::sync::mpsc::Sender<ChannelMessage>,
+        proxy_state: &Option<Arc<Mutex<ProxyState>>>,
         model_id: &str,
     ) {
         let bg_model_id = model_id.to_string();
         let bg_pm = Arc::clone(pm);
         let bg_sender = sender.clone();
+        let bg_proxy = proxy_state.clone();
 
         std::thread::spawn(move || {
             // Send RestartRequested first so the main loop clears other cards.
@@ -833,11 +908,29 @@ impl MainWindow {
                 pm_lock.start_model(&bg_model_id)
             };
 
+            let is_ok = result.is_ok();
+
             // Send SwitchCompleted back to the main thread.
             let _ = bg_sender.send(ChannelMessage::SwitchCompleted {
-                target_id: bg_model_id,
+                target_id: bg_model_id.clone(),
                 result,
             });
+
+            // Update proxy state after a successful auto-restart.
+            if is_ok {
+                if let Some(ref proxy) = bg_proxy {
+                    let mut ps = proxy.lock().unwrap();
+                    let port = match bg_pm.lock() {
+                        Ok(pm) => pm.config().models.iter()
+                            .find(|m| m.id == bg_model_id)
+                            .map(|m| m.port),
+                        Err(_) => None,
+                    };
+                    if let Some(port) = port {
+                        ps.set_target(port);
+                    }
+                }
+            }
         });
     }
 }
