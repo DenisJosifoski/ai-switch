@@ -8,6 +8,7 @@ use gtk::prelude::*;
 
 mod menu;
 mod model_card;
+mod preferences;
 mod window;
 
 fn main() -> glib::ExitCode {

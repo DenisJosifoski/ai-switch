@@ -166,7 +166,7 @@ fn test_repeated_switch_loop() {
     }
 
     // Stop the last running model (through ProcessManager, not pkill).
-    pm.stop_model("model-a").expect("should stop model-a");
+    pm.stop_model("model-a", false).expect("should stop model-a");
 
     // Verify no orphan processes via port check.
     verify_ports_free();
@@ -274,7 +274,7 @@ fn test_port_free_between_switch_steps() {
     );
 
     // Stop the last running model (through ProcessManager, not pkill).
-    pm.stop_model("model-b").expect("should stop model-b");
+    pm.stop_model("model-b", false).expect("should stop model-b");
 
     // Verify no orphan processes via port check.
     verify_ports_free();

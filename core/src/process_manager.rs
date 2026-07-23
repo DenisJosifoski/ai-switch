@@ -78,7 +78,9 @@ pub trait ProcessGuard: Send {
         Self: Sized;
 
     /// Terminate the model process.
-    fn terminate(&self) -> Result<(), ProcessError>;
+    /// If `fast_shutdown` is true, escalate to SIGKILL after 500ms instead of
+    /// waiting up to `shutdown_timeout_sec`, releasing GPU memory instantly.
+    fn terminate(&self, fast_shutdown: bool) -> Result<(), ProcessError>;
 }
 
 /// Linux implementation of ProcessGuard.
@@ -208,7 +210,7 @@ impl LinuxProcessGuard {
             .open(&log_path)?)
     }
 
-    fn terminate_process_group(pid: Pid, timeout_sec: u16) -> Result<(), ProcessError> {
+    fn terminate_process_group(pid: Pid, timeout_sec: u16, fast_shutdown: bool) -> Result<(), ProcessError> {
         let raw_pid = pid.as_raw();
 
         // Safety: do not signal pid <= 0 (invalid or kernel process).
@@ -260,10 +262,16 @@ impl LinuxProcessGuard {
         // Step a: Send SIGTERM to the process group.
         signal_target(pgid, SIGTERM)?;
 
-        // Step b: Wait/poll until the port is free or shutdown timeout expires.
-        let deadline = std::time::Instant::now() + Duration::from_secs(timeout_sec as u64);
+        // Step b: Wait/poll until the process exits or shutdown timeout expires.
+        // During fast shutdown (app close), escalate to SIGKILL after 500ms to
+        // release GPU memory instantly instead of waiting up to 10s.
+        let graceful_timeout = if fast_shutdown {
+            Duration::from_millis(500)
+        } else {
+            Duration::from_secs(timeout_sec as u64)
+        };
+        let deadline = std::time::Instant::now() + graceful_timeout;
         loop {
-            // Wait for our direct child pid (which is the session leader)
             match nix::sys::wait::waitpid(pid, Some(nix::sys::wait::WaitPidFlag::WNOHANG)) {
                 Ok(nix::sys::wait::WaitStatus::StillAlive) => {
                     if std::time::Instant::now() >= deadline {
@@ -306,9 +314,9 @@ impl ProcessGuard for LinuxProcessGuard {
         Self::setup(script, port, log_dir)
     }
 
-    fn terminate(&self) -> Result<(), ProcessError> {
+    fn terminate(&self, fast_shutdown: bool) -> Result<(), ProcessError> {
         if let Some(pid) = self.pid {
-            Self::terminate_process_group(pid, self.shutdown_timeout_sec)?;
+            Self::terminate_process_group(pid, self.shutdown_timeout_sec, fast_shutdown)?;
         }
         Ok(())
     }
@@ -418,7 +426,9 @@ impl ProcessManager {
     }
 
     /// Stop a model by id.
-    pub fn stop_model(&mut self, id: &str) -> Result<(), ProcessError> {
+    /// If `fast_shutdown` is true, escalate to SIGKILL after 500ms instead of
+    /// waiting up to `shutdown_timeout_sec`, releasing GPU memory instantly.
+    pub fn stop_model(&mut self, id: &str, fast_shutdown: bool) -> Result<(), ProcessError> {
         let running = self
             .running_model
             .as_ref()
@@ -438,7 +448,7 @@ impl ProcessManager {
             .ok_or_else(|| ProcessError::NotRunning(id.to_string()))?;
 
         // Terminate the process group
-        running.guard.terminate()?;
+        running.guard.terminate(fast_shutdown)?;
 
         // Confirm port is free via TCP bind retry (up to 10s)
         Self::wait_port_free(port, Duration::from_secs(10))?;
@@ -449,7 +459,7 @@ impl ProcessManager {
     }
 
     /// Stop all running models.
-    pub fn stop_all(&mut self) -> Result<(), ProcessError> {
+    pub fn stop_all(&mut self, fast_shutdown: bool) -> Result<(), ProcessError> {
         if let Some(ref running) = self.running_model {
             let id = running.id.clone();
             let port = self
@@ -459,7 +469,7 @@ impl ProcessManager {
                 .find(|m| m.id == id)
                 .map(|m| m.port)
                 .ok_or_else(|| ProcessError::NotRunning(id.clone()))?;
-            running.guard.terminate()?;
+            running.guard.terminate(fast_shutdown)?;
             Self::wait_port_free(port, Duration::from_secs(10))?;
         }
         self.running_model = None;
@@ -469,7 +479,7 @@ impl ProcessManager {
     /// Switch from one model to another (atomic sequence).
     pub fn switch_model(&mut self, from_id: &str, to_id: &str) -> Result<(), ProcessError> {
         // Step 1: stop the current model
-        self.stop_model(from_id)?;
+        self.stop_model(from_id, false)?;
 
         // Step 2: short delay for CUDA context release
         std::thread::sleep(Duration::from_millis(500));

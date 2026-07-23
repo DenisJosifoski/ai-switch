@@ -89,8 +89,8 @@ pub fn start_and_wait(
 }
 
 /// Stop a running model.
-pub fn stop_model(pm: &mut ProcessManager, model_id: &str) -> Result<(), ProcessError> {
-    pm.stop_model(model_id)?;
+pub fn stop_model(pm: &mut ProcessManager, model_id: &str, fast_shutdown: bool) -> Result<(), ProcessError> {
+    pm.stop_model(model_id, fast_shutdown)?;
     Ok(())
 }
 

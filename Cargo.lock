@@ -22,6 +22,9 @@ dependencies = [
  "gio",
  "glib",
  "gtk4",
+ "reqwest",
+ "serde_json",
+ "toml 0.8.23",
  "tracing",
  "tracing-subscriber",
 ]

@@ -52,7 +52,7 @@ fn main() {
 
                 // Stop the model
                 println!("Stopping model '{}'...", id);
-                if ai_switch_core::stop_model(&mut pm, id).is_ok() {
+                if ai_switch_core::stop_model(&mut pm, id, false).is_ok() {
                     println!("Model '{}' stopped successfully", id);
                 } else {
                     eprintln!("Failed to stop model '{}'", id);

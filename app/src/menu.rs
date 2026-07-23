@@ -38,10 +38,10 @@ fn build_file_section() -> Menu {
     menu
 }
 
-/// Build the Edit section: Preferences (stub).
+/// Build the Edit section: Preferences.
 fn build_edit_section() -> Menu {
     let menu = Menu::new();
-    menu.append(Some("Preferences"), None);
+    menu.append(Some("Preferences"), Some("win.preferences"));
     menu
 }
 

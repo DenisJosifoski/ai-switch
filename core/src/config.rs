@@ -33,7 +33,7 @@ impl From<toml::ser::Error> for ConfigError {
 use serde::de::Error as _;
 
 /// A single model configuration entry.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct ModelConfig {
     pub id: String,
     pub name: String,
@@ -72,7 +72,7 @@ where
 }
 
 /// Global settings section.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct GlobalSettings {
   #[serde(default, deserialize_with = "deserialize_optional_pathbuf")]
     pub log_dir: Option<PathBuf>,
@@ -93,7 +93,7 @@ impl Default for GlobalSettings {
 }
 
 /// Root configuration.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, serde::Serialize)]
 pub struct Config {
     pub schema_version: u8,
     #[serde(default)]
