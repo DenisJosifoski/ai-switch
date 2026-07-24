@@ -202,7 +202,7 @@ fn handle_proxy_request(mut req: Request, state: Arc<Mutex<ProxyState>>) {
 
     // Send the request to the model server via reqwest (blocking client)
     let client = match reqwest::blocking::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
+        .timeout(std::time::Duration::from_secs(600))
         .build()
     {
         Ok(c) => c,

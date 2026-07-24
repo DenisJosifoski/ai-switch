@@ -21,6 +21,7 @@ use std::cell::RefCell;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
+use crate::logs_panel::LogViewerWindow;
 use crate::menu;
 use crate::model_card::{CardState, ModelCard};
 use crate::preferences::PreferencesDialog;
@@ -64,6 +65,8 @@ pub struct MainWindow {
     /// Proxy state — updated when a model starts/stops so the reverse proxy
     /// knows where to forward incoming requests.
     proxy_state: Option<Arc<Mutex<ProxyState>>>,
+    /// The currently open log viewer window (if any).
+    log_viewer: Rc<RefCell<Option<LogViewerWindow>>>,
 }
 
 impl MainWindow {
@@ -254,6 +257,9 @@ impl MainWindow {
         );
 
         // Wire toggle and restart handlers.
+        // Create log_viewer before the closure block so it can be captured by
+        // the logs button handler closures below.
+        let log_viewer = Rc::new(RefCell::new(None::<LogViewerWindow>));
         {
             let pm_clone = Arc::clone(&pm);
             let keep_alive_ref = Rc::clone(&current_keep_alive);
@@ -501,17 +507,66 @@ impl MainWindow {
                         });
                     });
                 }
+
+                // ── Logs button handler ────────────────────────────────
+                {
+                    let _card_model_id = model_id.clone();
+                    let card_config = card.config().clone();
+                    let log_viewer_ref = Rc::clone(&log_viewer);
+                    let log_dir = config.log_dir();
+
+                    card.set_logs_handler(move || {
+                        let viewer = LogViewerWindow::new(
+                            &card_config.name,
+                            &card_config.script_path,
+                            &log_dir,
+                        );
+                        viewer.present();
+                        *log_viewer_ref.borrow_mut() = Some(viewer);
+                    });
+                }
             }
         }
 
-        Self {
+        // `log_viewer` was defined above so closures could capture it.
+        // It is already initialized; re-use the same Rc here.
+
+        let instance = Self {
             widget,
             cards,
             current_keep_alive,
             config,
             config_path,
             proxy_state,
+            log_viewer: Rc::clone(&log_viewer),
+        };
+
+        // Wire the toggle logs panel action (View → Toggle Logs Panel).
+        // Opens a log viewer for the first configured model.
+        // Clone the first model's data before creating the closure so it has
+        // 'static lifetime (the closure outlives this function scope).
+        let first_model_data = instance.config.models.first().cloned();
+        if let Some(first_model) = first_model_data {
+            let lv_ref = Rc::clone(&log_viewer);
+            let config_for_logs = instance.config.clone();
+            let toggle_action = gio::SimpleAction::new("toggle_logs", None);
+            toggle_action.connect_activate(glib::clone!(
+                #[strong]
+                lv_ref,
+                move |_, _| {
+                    let viewer = LogViewerWindow::new(
+                        &first_model.name,
+                        &first_model.script_path,
+                        &config_for_logs.log_dir(),
+                    );
+                    viewer.present();
+                    *lv_ref.borrow_mut() = Some(viewer);
+                }
+            ));
+            instance.widget.add_action(&toggle_action);
         }
+
+        instance
     }
 
     pub fn show(&self) {
@@ -565,6 +620,10 @@ impl MainWindow {
             }
         ));
         window.add_action(&preferences_action);
+
+        // Toggle Logs Panel action — View → Toggle Logs Panel.
+        let toggle_logs_action = gio::SimpleAction::new("toggle_logs", None);
+        window.add_action(&toggle_logs_action);
     }
 
     /// Show the preferences dialog (non-blocking).

@@ -98,6 +98,10 @@ impl LinuxProcessGuard {
     fn setup(script: &Path, port: u16, log_dir: &Path) -> Result<Self, ProcessError> {
         let log_file = Self::open_log_file(script, log_dir)?;
 
+        // Rotate old log files for this model (keep most recent 20).
+        let script_stem = script.file_stem().unwrap_or_default().to_string_lossy().to_string();
+        Self::rotate_logs(log_dir, &script_stem, 20);
+
         // Fork the child so we can set PDEATHSIG before exec
         let parent_pid = unsafe { libc::getpid() };
         let fork_result = unsafe { libc::fork() };
@@ -208,6 +212,40 @@ impl LinuxProcessGuard {
             .write(true)
             .append(true)
             .open(&log_path)?)
+    }
+
+    /// Rotate (delete old) log files for a given model, keeping only the
+    /// most recent `keep` files.
+    ///
+    /// Log files follow the pattern `{script_stem}_{YYYYMMDD_HHMMSS}.log`.
+    /// This function scans the log directory, filters by script stem, and
+    /// deletes files beyond the retention count (default 20).
+    pub fn rotate_logs(log_dir: &Path, script_stem: &str, keep: usize) {
+        let mut entries: Vec<std::fs::DirEntry> = match std::fs::read_dir(log_dir) {
+            Ok(rd) => rd.filter_map(|e| e.ok()).collect(),
+            Err(_) => return, // Directory doesn't exist — nothing to rotate.
+        };
+
+        // Filter to matching log files.
+        entries.retain(|e| {
+            let name = e.file_name().to_string_lossy().to_string();
+            name.ends_with(".log") && name.starts_with(&format!("{}_", script_stem))
+        });
+
+        // Sort descending by filename (timestamps are zero-padded).
+        entries.sort_by(|a, b| {
+            b.file_name()
+                .cmp(&a.file_name())
+        });
+
+        // Delete excess files.
+        for entry in entries.iter().skip(keep) {
+            if let Err(e) = std::fs::remove_file(entry.path()) {
+                warn!("failed to delete old log file {:?}: {}", entry.path(), e);
+            } else {
+                debug!("rotated old log file: {:?}", entry.path());
+            }
+        }
     }
 
     fn terminate_process_group(pid: Pid, timeout_sec: u16, fast_shutdown: bool) -> Result<(), ProcessError> {

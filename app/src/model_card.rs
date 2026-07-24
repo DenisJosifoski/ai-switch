@@ -81,8 +81,10 @@ pub struct ModelCard {
     context_label: Label,
     /// Restart button.
     pub restart_button: Button,
-    /// Logs button (stub — wired in Phase 6).
+    /// Logs button — opens a log viewer window for this model's log file.
     logs_button: Button,
+    /// Closure called when the Logs button is clicked.
+    on_logs_clicked: std::rc::Rc<std::cell::RefCell<Option<Box<dyn Fn()>>>>,
     /// Blocks the toggle handler during programmatic state changes.
     /// Prevents GTK4's re-entrant `toggled` signal from spawning
     /// unwanted stop/switch threads when set_state/set_starting
@@ -133,10 +135,10 @@ impl ModelCard {
         restart_button.set_css_classes(&["flat"]);
         restart_button.set_sensitive(false); // disabled until model is Ready/Error
 
-        // Logs button (stub)
+        // Logs button — opens the log viewer for this model's log file.
         let logs_button = Button::with_label("Logs");
         logs_button.set_css_classes(&["flat"]);
-        logs_button.set_sensitive(false); // stub — Phase 6
+        logs_button.set_sensitive(false); // disabled until model is Ready/Error
 
         controls.append(&toggle);
         controls.append(&restart_button);
@@ -165,6 +167,7 @@ impl ModelCard {
             restart_button,
             logs_button,
             signal_block: Rc::new(Cell::new(false)),
+            on_logs_clicked: Rc::new(RefCell::new(None::<Box<dyn Fn()>>)),
         }
     }
 
@@ -182,6 +185,23 @@ impl ModelCard {
                 return;
             }
             handler_ref(btn.is_active());
+        });
+    }
+
+    /// Set the callback invoked when the Logs button is clicked.
+    ///
+    /// Called by MainWindow after construction to open a log viewer window
+    /// scoped to this model's log file.
+    pub fn set_logs_handler(&mut self, handler: impl Fn() + 'static) {
+        *self.on_logs_clicked.borrow_mut() = Some(Box::new(handler));
+
+        // Wire the click handler. The closure captures `handler_ref` (an Rc)
+        // which keeps the handler alive for the lifetime of the button.
+        let handler_ref = Rc::clone(&self.on_logs_clicked);
+        self.logs_button.connect_clicked(move |_| {
+            if let Some(ref cb) = *handler_ref.borrow() {
+                cb();
+            }
         });
     }
 
@@ -213,10 +233,11 @@ impl ModelCard {
         self.toggle.set_sensitive(!transitioning);
         self.status_label.set_text(new_state.status_text());
 
-        // Update restart button sensitivity: enabled only when Ready or Error.
-        self.restart_button.set_sensitive(
-            matches!(&new_state, CardState::Ready | CardState::Error(_)),
-        );
+        // Update restart button and logs button sensitivity: enabled only when
+        // Ready or Error (logs available once the model has produced output).
+        let interactive = matches!(&new_state, CardState::Ready | CardState::Error(_));
+        self.restart_button.set_sensitive(interactive);
+        self.logs_button.set_sensitive(interactive);
 
         *self.state.borrow_mut() = new_state;
         self.unblock_signals();
@@ -230,6 +251,7 @@ impl ModelCard {
         self.toggle.set_sensitive(false);
         self.status_label.set_text("Starting...");
         self.restart_button.set_sensitive(false);
+        self.logs_button.set_sensitive(false);
         *self.state.borrow_mut() = CardState::Starting;
         self.unblock_signals();
     }

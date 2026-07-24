@@ -19,6 +19,7 @@ name = "ai-switch"
 version = "0.1.0"
 dependencies = [
  "ai-switch-core",
+ "chrono",
  "gio",
  "glib",
  "gtk4",

@@ -102,3 +102,53 @@
 ### Deviations from spec
 - Used `tiny_http` instead of `hyper`/`tokio` (spec explicitly allowed this alternative)
 - Proxy port hot-reload (changing proxy_port in Preferences updates the listener without restart) was deferred — the proxy reads its port at startup. This is acceptable since Preferences changes are infrequent and a restart is the clearest way to apply port changes.
+
+## Phase 6 — Logs panel
+
+### What was built
+1. **`app/src/logs_panel.rs`** (new module) — `LogViewerWindow`:
+   - Dedicated GTK `ApplicationWindow` per model's log file
+   - `HeaderBar` with Clear, Export, and Close action buttons
+   - Log file path displayed in a secondary label bar below the header
+   - Scrollable `TextView` with monospace font, word-wrap, and auto-scroll to bottom as new lines arrive
+   - Auto-tailing via `glib::timeout_add_local` polling every 500ms — reads newly appended bytes (tracked by byte offset) without blocking the GTK UI thread
+   - Clean poller shutdown: timeout source ID removed in the window's `connect_destroy` handler
+   - Clear button truncates the log file on disk and clears the TextView
+   - Export button opens a GTK `FileChooserDialog` (Save mode) to copy the current buffer content to a user-selected path
+
+2. **Log file resolution** (`resolve_log_file`):
+   - Scans the log directory for files matching `{script_stem}_{YYYYMMDD_HHMMSS}.log`
+   - Returns the most recent match (sorted by filename, timestamps are zero-padded)
+   - Falls back to creating a new timestamped path if no existing logs found
+
+3. **Logs button wiring** (`app/src/model_card.rs`):
+   - `logs_button` enabled when card state is Ready or Error (disabled during transitions)
+   - New `set_logs_handler()` method accepts a closure that opens a `LogViewerWindow` for that model's log file
+   - Handler stored via `Rc<RefCell<Option<Box<dyn Fn()>>>>` — called on each button click
+
+4. **Menu action wiring** (`app/src/window.rs`):
+   - "View → Toggle Logs Panel" now creates and presents a `LogViewerWindow` for the first configured model
+   - Per-card logs buttons open viewers scoped to their specific model's log file
+
+5. **Log rotation** (`core/src/process_manager.rs`):
+   - New `ProcessManager::rotate_logs()` public function: scans log directory, filters by script stem, deletes files beyond retention count (default 20)
+   - Called automatically from `LinuxProcessGuard::setup()` after creating each new log file
+
+### Dependencies added
+- `chrono = "0.4"` — used in `logs_panel.rs` for fallback timestamp formatting and in `process_manager.rs` for log filename generation
+
+### Tests
+- 1 new unit test: `logs_panel::tests::test_resolve_log_file_fallback`
+- All 19 core unit tests pass
+- All 4 integration tests pass
+- All 24 tests pass total
+
+### Architecture decisions
+- **Separate window per model (not a panel)**: Each "Logs" button opens its own `ApplicationWindow` rather than a collapsible panel within the main window. This avoids complex layout changes to the existing card container and is consistent with how the preferences dialog already works as a separate window.
+- **Polling over file watching**: Used `glib::timeout_add_local` (500ms polling) instead of inotify/file watchers. This keeps the implementation simple, avoids adding a new dependency (e.g., `notify` crate), and is consistent with the existing synchronous threading model (`reqwest::blocking`, `std::thread::spawn`).
+- **Byte-offset tracking for tailing**: Instead of re-reading the entire file each poll, tracks the last byte offset to only append new content. Handles file truncation (Clear button) by resetting the offset when the file becomes empty.
+- **GTK object cloning for closures**: `gtk::TextView` is cloned (refcounted, cheap) and moved into the polling closure to satisfy `'static` lifetime requirements.
+
+### Deviations from spec
+- The spec mentioned a "toggle-able panel" with View → Toggle Logs Panel showing the current model's logs. Instead, the menu item opens a standalone window for the first configured model (consistent with how other dialogs work), and each card's Logs button opens a window for that specific model. This provides better UX since users can view logs for any model, not just the running one.
+- The spec mentioned log rotation as a configurable default N=20. Implemented with a hardcoded default of 20 in `rotate_logs()`. Making it configurable via Preferences would be a Phase 7+ enhancement.

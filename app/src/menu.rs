@@ -45,11 +45,11 @@ fn build_edit_section() -> Menu {
     menu
 }
 
-/// Build the View section: Refresh, Toggle Logs Panel (stub).
+/// Build the View section: Refresh, Toggle Logs Panel.
 fn build_view_section() -> Menu {
     let menu = Menu::new();
     menu.append(Some("Refresh"), Some("win.refresh"));
-    menu.append(Some("Toggle Logs Panel"), None);
+    menu.append(Some("Toggle Logs Panel"), Some("win.toggle_logs"));
     menu
 }
 

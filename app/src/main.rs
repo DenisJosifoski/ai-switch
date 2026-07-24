@@ -9,6 +9,7 @@ use std::sync::Arc;
 use gtk4 as gtk;
 use gtk::prelude::*;
 
+mod logs_panel;
 mod menu;
 mod model_card;
 mod preferences;
